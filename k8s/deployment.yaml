@@ -3,7 +3,9 @@ kind: Deployment
 metadata:
   name: cloudflare-ddns-rfc2136
 spec:
-  replicas: 2
+  replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: cloudflare-ddns-rfc2136

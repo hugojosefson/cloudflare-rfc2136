@@ -8,6 +8,7 @@ data:
   DNS_ZONE: "example.internal."
   ALLOWED_RECORD_SUFFIX: "example.internal."
   DEFAULT_TTL: "300"
+  ENABLE_ACME_TXT: "false"
   TSIG_KEY_NAME: "ddns-key."
   TSIG_ALGORITHM: "hmac-sha256"
   LOG_LEVEL: "info"
