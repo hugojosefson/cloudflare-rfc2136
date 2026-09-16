@@ -100,15 +100,13 @@ You can retry TXT additions and value-specific removals after a failure.
 API refusal, timeout, invalid responses, and rate limits also return `SERVFAIL`.
 
 Each API request has a fifteen-second timeout. One UPDATE can use multiple API requests and wait for a lock.
-The issuer timeout must cover that work. The current proxy timeout is ten seconds and needs correction.
+The issuer timeout must cover that work.
 
 ## Proxy integration
 
-The reviewed `acme-proxy/acme-proxy` updater uses `delete_rrset` for cleanup.
-The bridge refuses that request because it contains no value to remove.
-The proxy must use `delete_by_rdata` with the challenge TXT value.
-Public DNS polling, response TSIG verification, UDP peer checks, and timeout changes belong in the proxy.
-See the [proxy updater](https://github.com/acme-proxy/acme-proxy/blob/f005ffa4a32b1868976d9c48b504f7b00e8786ec/src/signer/relay/dns01.rs).
+The issuer must send value-specific TXT cleanup. The bridge refuses full-set removal.
+The [proxy specification](https://github.com/hugojosefson/acme-proxy/blob/docs/cloudflare-rfc2136-plan/needed-features.md)
+records the required changes to `acme-proxy/acme-proxy`.
 
 Local tests use a mock Cloudflare API, dummy credentials, and signed UDP and TCP messages.
 Hickory message-builder tests check value-specific cleanup in DNS packets.
