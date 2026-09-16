@@ -119,6 +119,35 @@ cargo test --workspace --locked
 docker buildx build --builder arm64builder --platform linux/amd64,linux/arm64 --output type=oci,dest=/tmp/agents/cloudflare-rfc2136/acme-dns01.oci.tar --metadata-file /tmp/agents/cloudflare-rfc2136/build-metadata.json .
 ```
 
-The local OCI image index digest is
+The initial implementation OCI image index digest is
 `sha256:36940556ee119ef628cb95cb42329a6099d93f24104fe78025a1297a7b5d71d4`.
 This image was not deployed to dev.
+
+## Scope review
+
+Preserve existing text and behavior outside the ACME requirements. A change
+outside that scope must have its own commit and a stated reason.
+
+Commit `a7ea481` restores the existing README headings, TSIG key generation
+instructions, placeholder examples, and deployment commands.
+The README changes cover ACME permissions, operations, limits, and integration evidence.
+Commit `d3b310d` restores the existing configuration diagnostics and `RawConfig`
+debug implementation. Those changes were not necessary for the ACME setting.
+
+The retained changes have these reasons:
+
+- API error redaction meets the requirement to keep credentials out of errors and logs.
+- Pagination and shared locks are necessary for TXT cleanup and concurrency.
+- One Kubernetes replica and `Recreate` prevent overlap between writers during deployment.
+- Injectable API construction and listener sockets support mock and protocol tests.
+
+Restoration checks compare the TSIG, Cloudflare token, Docker, and Kubernetes
+README sections with `origin/main`. All four sections are the same.
+After the configuration restoration, formatting, Clippy, the locked build, and
+all 28 tests succeeded. AMD64 and ARM64 container builds also succeeded.
+The temporary filesystem quota prevented image export.
+The build retry below succeeded without an image export or publication:
+
+```sh
+docker buildx build --builder arm64builder --platform linux/amd64,linux/arm64 --output type=cacheonly .
+```
