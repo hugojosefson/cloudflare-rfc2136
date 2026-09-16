@@ -283,3 +283,6 @@ fn response_code_to_u8(code: ResponseCode) -> u8 {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod nsupdate_tests;
