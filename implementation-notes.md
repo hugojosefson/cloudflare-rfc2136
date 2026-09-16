@@ -41,16 +41,23 @@ The Kubernetes example has one replica, `Recreate`, and TXT disabled by default.
 Docker is available. `kubectl` and `bd`
 are unavailable. This document records follow-up work because `bd` is unavailable.
 
+## Pull request and CI
+
+[PR 1](https://github.com/47star/cloudflare-rfc2136/pull/1) is open as a draft.
+The first [upstream CI run](https://github.com/47star/cloudflare-rfc2136/actions/runs/35106609951)
+reports `action_required` and has no jobs. The authenticated account has read-only
+access to the upstream repository. A maintainer must resolve the CI restriction.
+Local Rust checks and container builds succeeded as recorded below.
+
 ## Next steps
 
 The remaining work sequence is:
 
-1. Make a draft PR with test results and deployment limits.
-2. Correct the proxy code in a different PR.
-3. Select the dev target and test domain.
-4. Deploy the PR image to dev and record behavior checks.
-5. Do the staging trial with the corrected proxy.
-6. Keep the PR draft until the dev checks succeed.
+1. Correct the proxy code in a different PR.
+2. Select the dev target and test domain.
+3. Deploy the PR image to dev and record behavior checks.
+4. Do the staging trial with the corrected proxy.
+5. Keep the PR draft until the dev checks succeed.
 
 ## External work
 
