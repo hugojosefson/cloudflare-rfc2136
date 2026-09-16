@@ -151,3 +151,30 @@ The build retry below succeeded without an image export or publication:
 ```sh
 docker buildx build --builder arm64builder --platform linux/amd64,linux/arm64 --output type=cacheonly .
 ```
+
+## Instruction inspection
+
+I examined the session instructions, `../AGENTS.md`, and `/home/user/.codex/AGENTS.md`.
+The repository and the updated `origin/main` contain no `AGENTS.md`, `CLAUDE.md`, contribution instructions, or PR template.
+GitHub gave HTTP 404 for `47star/.github`. No default contribution instructions were available there.
+
+I examined these project files:
+
+- [README.md](README.md).
+- [Cargo.toml](Cargo.toml).
+- [CI workflow](.github/workflows/ci.yaml).
+- [Release workflow](.github/workflows/release.yaml).
+
+I found no documentation generation task or source template.
+The Rust and container checks above include the required CI checks after the last code change.
+This inspection found no requirement for more code changes.
+The Git whitespace check passed.
+
+The PR stays in draft until dev deployment and behavior checks succeed.
+Planning documents have their own commits.
+The user instruction specifies the fork remote `hugojosefson` for pushes.
+This instruction replaces the parent instruction to push to `origin`.
+
+The parent instruction requires `bd` for issue tracking and synchronization.
+The `bd` command is not available. I cannot do those steps.
+This document records the remaining work.
