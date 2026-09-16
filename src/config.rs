@@ -24,7 +24,7 @@ pub struct AppConfig {
     pub log_level: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct RawConfig {
     listen_udp: String,
     listen_tcp: String,
@@ -44,7 +44,7 @@ struct RawConfig {
 impl AppConfig {
     pub fn from_env() -> Result<Self> {
         let raw: RawConfig = envy::from_env()
-            .map_err(|_| Error::Config("missing or invalid environment".to_string()))?;
+            .map_err(|error| Error::Config(format!("missing or invalid environment: {error}")))?;
 
         let listen_udp = parse_socket_addr("LISTEN_UDP", &raw.listen_udp)?;
         let listen_tcp = parse_socket_addr("LISTEN_TCP", &raw.listen_tcp)?;
