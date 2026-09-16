@@ -1,11 +1,10 @@
-use std::fmt;
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum DnsRecordKind {
     A,
     Aaaa,
+    Txt,
 }
 
 impl DnsRecordKind {
@@ -13,6 +12,7 @@ impl DnsRecordKind {
         match self {
             Self::A => "A",
             Self::Aaaa => "AAAA",
+            Self::Txt => "TXT",
         }
     }
 }
@@ -20,6 +20,9 @@ impl DnsRecordKind {
 #[derive(Debug, Clone, Deserialize)]
 pub struct DnsRecord {
     pub id: String,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub record_type: String,
     pub content: String,
     pub ttl: u32,
     pub proxied: Option<bool>,
@@ -29,19 +32,19 @@ pub struct DnsRecord {
 pub struct ApiEnvelope<T> {
     pub success: bool,
     pub errors: Vec<ApiError>,
-    pub result: T,
+    pub result: Option<T>,
+    pub result_info: Option<PageInfo>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ApiError {
     pub code: i64,
-    pub message: String,
 }
 
-impl fmt::Display for ApiError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}: {}", self.code, self.message)
-    }
+#[derive(Debug, Deserialize)]
+pub struct PageInfo {
+    pub page: u32,
+    pub total_pages: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,5 +59,6 @@ pub struct RecordRequest<'a> {
     pub name: &'a str,
     pub content: &'a str,
     pub ttl: u32,
-    pub proxied: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxied: Option<bool>,
 }

@@ -1,10 +1,15 @@
 use hickory_proto::rr::Name;
 
+use crate::cloudflare::model::DnsRecordKind;
 use crate::config::AppConfig;
 
 use super::DnsError;
 
-pub fn normalize_owner_name(name: &Name, config: &AppConfig) -> Result<Name, DnsError> {
+pub fn normalize_owner_name(
+    name: &Name,
+    kind: DnsRecordKind,
+    config: &AppConfig,
+) -> Result<Name, DnsError> {
     let mut normalized = name.to_lowercase();
     normalized.set_fqdn(true);
 
@@ -26,10 +31,30 @@ pub fn normalize_owner_name(name: &Name, config: &AppConfig) -> Result<Name, Dns
         )));
     }
 
-    if normalized.is_wildcard() {
+    if normalized.is_wildcard()
+        || (kind == DnsRecordKind::Txt && normalized.iter().any(|label| label.contains(&b'*')))
+    {
         return Err(DnsError::RecordRejected(
             "wildcard records are not allowed".to_string(),
         ));
+    }
+
+    if kind == DnsRecordKind::Txt {
+        if !config.enable_acme_txt || normalized.iter().next() != Some(b"_acme-challenge") {
+            return Err(DnsError::RecordRejected(
+                "TXT requires ENABLE_ACME_TXT and the _acme-challenge label".to_string(),
+            ));
+        }
+        if normalized
+            .iter()
+            .skip(1)
+            .any(|label| label.starts_with(b"_"))
+        {
+            return Err(DnsError::RecordRejected(
+                "unsupported underscore label".to_string(),
+            ));
+        }
+        return Ok(normalized);
     }
 
     if first_label_starts_with_underscore(&normalized) {

@@ -4,9 +4,9 @@ use std::time::Duration;
 use reqwest::{Client, StatusCode};
 use serde::de::DeserializeOwned;
 use thiserror::Error;
-use tracing::warn;
 
-use super::model::{ApiEnvelope, ApiError, DeleteResult, DnsRecord, DnsRecordKind, RecordRequest};
+use super::model::{ApiEnvelope, DeleteResult, DnsRecord, DnsRecordKind, RecordRequest};
+use super::{record_locks::RecordLocks, txt};
 
 const BASE_URL: &str = "https://api.cloudflare.com/client/v4";
 
@@ -16,36 +16,29 @@ pub struct CloudflareClient {
     base_url: String,
     zone_id: String,
     api_token: String,
+    locks: RecordLocks,
 }
 
 #[derive(Debug, Error)]
 pub enum CloudflareError {
-    #[error("failed to create HTTP client: {0}")]
-    ClientBuild(reqwest::Error),
+    #[error("HTTP client construction failed")]
+    ClientBuild,
 
-    #[error("HTTP request failed for {operation}: {source}")]
-    Http {
-        operation: &'static str,
-        #[source]
-        source: reqwest::Error,
-    },
+    #[error("HTTP request failed for {operation}")]
+    Http { operation: &'static str },
 
-    #[error(
-        "Cloudflare API error for {operation}: status={status}, errors={}",
-        format_api_errors(errors)
-    )]
+    #[error("Cloudflare API error for {operation}: status={status}, codes={codes:?}")]
     Api {
         operation: &'static str,
         status: StatusCode,
-        errors: Vec<ApiError>,
+        codes: Vec<i64>,
     },
 
-    #[error("Cloudflare API response parse failed for {operation}: {source}")]
-    Parse {
-        operation: &'static str,
-        #[source]
-        source: serde_json::Error,
-    },
+    #[error("invalid Cloudflare response for {operation}")]
+    Parse { operation: &'static str },
+
+    #[error("unsupported TXT operation")]
+    InvalidTxt,
 }
 
 impl CloudflareClient {
@@ -71,13 +64,14 @@ impl CloudflareClient {
                 env!("CARGO_PKG_VERSION")
             ))
             .build()
-            .map_err(CloudflareError::ClientBuild)?;
+            .map_err(|_| CloudflareError::ClientBuild)?;
 
         Ok(Self {
             http,
             base_url,
             zone_id,
             api_token,
+            locks: RecordLocks::default(),
         })
     }
 
@@ -88,6 +82,10 @@ impl CloudflareClient {
         contents: &[String],
         ttl: u32,
     ) -> Result<(), CloudflareError> {
+        if kind == DnsRecordKind::Txt {
+            return Err(CloudflareError::InvalidTxt);
+        }
+        let _guard = self.locks.acquire(name, kind).await;
         let desired = dedupe(contents);
         let existing = self.list_records(kind, name).await?;
         let mut used_ids = HashSet::new();
@@ -126,11 +124,37 @@ impl CloudflareClient {
         Ok(())
     }
 
+    pub async fn add_txt(
+        &self,
+        name: &str,
+        content: &str,
+        ttl: u32,
+    ) -> Result<(), CloudflareError> {
+        if !content.is_ascii() || content.len() > 255 {
+            return Err(CloudflareError::InvalidTxt);
+        }
+        let _guard = self.locks.acquire(name, DnsRecordKind::Txt).await;
+        let records = self.list_records(DnsRecordKind::Txt, name).await?;
+        if records
+            .iter()
+            .any(|record| txt::decode(&record.content).as_deref() == Some(content))
+        {
+            return Ok(());
+        }
+        self.create_record(name, DnsRecordKind::Txt, &txt::encode(content), ttl)
+            .await?;
+        Ok(())
+    }
+
     pub async fn delete_rrset(
         &self,
         name: &str,
         kind: DnsRecordKind,
     ) -> Result<(), CloudflareError> {
+        if kind == DnsRecordKind::Txt {
+            return Err(CloudflareError::InvalidTxt);
+        }
+        let _guard = self.locks.acquire(name, kind).await;
         for record in self.list_records(kind, name).await? {
             self.delete_record_by_id(&record.id).await?;
         }
@@ -143,8 +167,14 @@ impl CloudflareClient {
         kind: DnsRecordKind,
         content: &str,
     ) -> Result<(), CloudflareError> {
+        let _guard = self.locks.acquire(name, kind).await;
         for record in self.list_records(kind, name).await? {
-            if record.content == content {
+            let matches = if kind == DnsRecordKind::Txt {
+                txt::decode(&record.content).as_deref() == Some(content)
+            } else {
+                record.content == content
+            };
+            if matches {
                 self.delete_record_by_id(&record.id).await?;
             }
         }
@@ -156,13 +186,44 @@ impl CloudflareClient {
         kind: DnsRecordKind,
         name: &str,
     ) -> Result<Vec<DnsRecord>, CloudflareError> {
-        let url = self.records_url();
-        let request = self.http.get(url).bearer_auth(&self.api_token).query(&[
-            ("type", kind.as_str()),
-            ("name", cloudflare_name(name).as_str()),
-        ]);
-
-        self.send(request, "list_records").await
+        let name = cloudflare_name(name);
+        let mut page = 1_u32;
+        let mut records = Vec::new();
+        loop {
+            let request = self
+                .http
+                .get(self.records_url())
+                .bearer_auth(&self.api_token)
+                .query(&[
+                    ("type", kind.as_str()),
+                    ("name", name.as_str()),
+                    ("page", &page.to_string()),
+                    ("per_page", "100"),
+                ]);
+            let envelope: ApiEnvelope<Vec<DnsRecord>> =
+                self.send_envelope(request, "list_records").await?;
+            let info = envelope.result_info.ok_or(CloudflareError::Parse {
+                operation: "list_records pagination",
+            })?;
+            let result = envelope.result.ok_or(CloudflareError::Parse {
+                operation: "list_records",
+            })?;
+            if info.page != page
+                || (info.total_pages < page
+                    && !(page == 1 && info.total_pages == 0 && result.is_empty()))
+            {
+                return Err(CloudflareError::Parse {
+                    operation: "list_records pagination",
+                });
+            }
+            records.extend(result.into_iter().filter(|record| {
+                cloudflare_name(&record.name) == name && record.record_type == kind.as_str()
+            }));
+            if page >= info.total_pages {
+                return Ok(records);
+            }
+            page += 1;
+        }
     }
 
     async fn create_record(
@@ -177,7 +238,7 @@ impl CloudflareClient {
             name: &cloudflare_name(name),
             content,
             ttl,
-            proxied: false,
+            proxied: (kind != DnsRecordKind::Txt).then_some(false),
         };
         let request = self
             .http
@@ -201,7 +262,7 @@ impl CloudflareClient {
             name: &cloudflare_name(name),
             content,
             ttl,
-            proxied: false,
+            proxied: (kind != DnsRecordKind::Txt).then_some(false),
         };
         let request = self
             .http
@@ -228,39 +289,44 @@ impl CloudflareClient {
         request: reqwest::RequestBuilder,
         operation: &'static str,
     ) -> Result<T, CloudflareError> {
+        self.send_envelope(request, operation)
+            .await?
+            .result
+            .ok_or(CloudflareError::Parse { operation })
+    }
+
+    async fn send_envelope<T: DeserializeOwned>(
+        &self,
+        request: reqwest::RequestBuilder,
+        operation: &'static str,
+    ) -> Result<ApiEnvelope<T>, CloudflareError> {
         let response = request
             .send()
             .await
-            .map_err(|source| CloudflareError::Http { operation, source })?;
-
+            .map_err(|_| CloudflareError::Http { operation })?;
         let status = response.status();
-        let retry_after = response
-            .headers()
-            .get(reqwest::header::RETRY_AFTER)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_string);
-
-        if status == StatusCode::TOO_MANY_REQUESTS {
-            warn!(operation, retry_after, "cloudflare rate limit response");
-        }
-
         let body = response
-            .text()
+            .bytes()
             .await
-            .map_err(|source| CloudflareError::Http { operation, source })?;
-
-        let envelope: ApiEnvelope<T> = serde_json::from_str(&body)
-            .map_err(|source| CloudflareError::Parse { operation, source })?;
-
-        if !status.is_success() || !envelope.success {
+            .map_err(|_| CloudflareError::Http { operation })?;
+        // Remote error text can contain credentials. Keep only status and numeric codes.
+        if !status.is_success() {
             return Err(CloudflareError::Api {
                 operation,
                 status,
-                errors: envelope.errors,
+                codes: Vec::new(),
             });
         }
-
-        Ok(envelope.result)
+        let envelope: ApiEnvelope<T> =
+            serde_json::from_slice(&body).map_err(|_| CloudflareError::Parse { operation })?;
+        if !envelope.success {
+            return Err(CloudflareError::Api {
+                operation,
+                status,
+                codes: envelope.errors.iter().map(|error| error.code).collect(),
+            });
+        }
+        Ok(envelope)
     }
 
     fn records_url(&self) -> String {
@@ -269,7 +335,7 @@ impl CloudflareClient {
 }
 
 fn cloudflare_name(name: &str) -> String {
-    name.trim_end_matches('.').to_string()
+    name.trim_end_matches('.').to_ascii_lowercase()
 }
 
 fn dedupe(contents: &[String]) -> Vec<String> {
@@ -281,16 +347,4 @@ fn dedupe(contents: &[String]) -> Vec<String> {
         }
     }
     result
-}
-
-fn format_api_errors(errors: &[ApiError]) -> String {
-    if errors.is_empty() {
-        return "none".to_string();
-    }
-
-    errors
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join("; ")
 }

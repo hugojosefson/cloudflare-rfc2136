@@ -198,6 +198,11 @@ async fn apply_change(
     cloudflare: &CloudflareClient,
 ) -> std::result::Result<(), crate::cloudflare::CloudflareError> {
     match change {
+        rfc2136::DnsChange::AddTxt { name, content } => {
+            cloudflare
+                .add_txt(&name, &content, config.default_ttl)
+                .await
+        }
         rfc2136::DnsChange::Upsert {
             name,
             kind,
@@ -277,15 +282,4 @@ fn response_code_to_u8(code: ResponseCode) -> u8 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn fallback_response_preserves_id_and_opcode() {
-        let raw = [0x12, 0x34, 0x28, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-        let response = fallback_response(&raw, ResponseCode::Refused);
-        assert_eq!(&response[0..2], &[0x12, 0x34]);
-        assert_eq!(response[2] & 0x78, 0x28);
-        assert_eq!(response[3], 5);
-    }
-}
+mod tests;

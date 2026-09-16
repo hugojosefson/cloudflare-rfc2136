@@ -12,6 +12,10 @@ use super::validation::normalize_owner_name;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum DnsChange {
+    AddTxt {
+        name: String,
+        content: String,
+    },
     Upsert {
         name: String,
         kind: DnsRecordKind,
@@ -47,10 +51,14 @@ pub fn extract_changes(message: &Message, config: &AppConfig) -> Result<Vec<DnsC
     let mut pending_adds: BTreeMap<(String, DnsRecordKind), Vec<String>> = BTreeMap::new();
 
     for record in &message.authorities {
-        let name = normalize_owner_name(&record.name, config)?.to_ascii();
         let kind = DnsRecordKind::try_from(record.record_type())?;
+        let name = normalize_owner_name(&record.name, kind, config)?.to_ascii();
 
         match classify_record(record, kind)? {
+            RecordOperation::Add(content) if kind == DnsRecordKind::Txt => {
+                flush_pending(&mut pending_adds, &mut changes);
+                changes.push(DnsChange::AddTxt { name, content });
+            }
             RecordOperation::Add(content) => {
                 pending_adds.entry((name, kind)).or_default().push(content);
             }
@@ -106,14 +114,22 @@ fn validate_zone(message: &Message, config: &AppConfig) -> Result<(), DnsError> 
 fn classify_record(record: &Record, kind: DnsRecordKind) -> Result<RecordOperation, DnsError> {
     match record.dns_class {
         DNSClass::IN => {
+            if kind == DnsRecordKind::Txt && record.ttl > i32::MAX as u32 {
+                return Err(DnsError::UnsupportedOperation(
+                    "TXT TTL exceeds 2147483647".to_string(),
+                ));
+            }
             let content = record_content(record, kind)?.ok_or_else(|| {
-                DnsError::UnsupportedOperation(
-                    "add operation must include A or AAAA data".to_string(),
-                )
+                DnsError::UnsupportedOperation("add operation must include record data".to_string())
             })?;
             Ok(RecordOperation::Add(content))
         }
         DNSClass::ANY => {
+            if kind == DnsRecordKind::Txt {
+                return Err(DnsError::UnsupportedOperation(
+                    "TXT removal must specify a value with class NONE".to_string(),
+                ));
+            }
             if record.ttl != 0 {
                 return Err(DnsError::UnsupportedOperation(
                     "delete-rrset operation must use TTL 0".to_string(),
@@ -136,7 +152,7 @@ fn classify_record(record: &Record, kind: DnsRecordKind) -> Result<RecordOperati
 
             let content = record_content(record, kind)?.ok_or_else(|| {
                 DnsError::UnsupportedOperation(
-                    "delete-record operation must include A or AAAA data".to_string(),
+                    "delete-record operation must include record data".to_string(),
                 )
             })?;
             Ok(RecordOperation::DeleteRecord(content))
@@ -151,6 +167,21 @@ fn record_content(record: &Record, kind: DnsRecordKind) -> Result<Option<String>
     match (&record.data, kind) {
         (RData::A(A(addr)), DnsRecordKind::A) => Ok(Some(addr.to_string())),
         (RData::AAAA(AAAA(addr)), DnsRecordKind::Aaaa) => Ok(Some(addr.to_string())),
+        (RData::TXT(txt), DnsRecordKind::Txt) => {
+            let [content] = txt.txt_data.as_ref() else {
+                return Err(DnsError::RecordRejected(
+                    "TXT must contain one string".to_string(),
+                ));
+            };
+            if !content.is_ascii() || content.len() > 255 {
+                return Err(DnsError::RecordRejected(
+                    "TXT must contain at most 255 ASCII bytes".to_string(),
+                ));
+            }
+            Ok(Some(String::from_utf8(content.to_vec()).map_err(|_| {
+                DnsError::RecordRejected("invalid TXT data".to_string())
+            })?))
+        }
         (RData::Update0(_), _) => Ok(None),
         _ => Err(DnsError::RecordRejected(format!(
             "record type {} is not allowed",
@@ -185,6 +216,7 @@ impl TryFrom<RecordType> for DnsRecordKind {
         match value {
             RecordType::A => Ok(Self::A),
             RecordType::AAAA => Ok(Self::Aaaa),
+            RecordType::TXT => Ok(Self::Txt),
             other => Err(DnsError::RecordRejected(format!(
                 "record type {other} is not allowed"
             ))),

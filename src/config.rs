@@ -17,13 +17,14 @@ pub struct AppConfig {
     pub cloudflare_zone_id: String,
     pub cloudflare_api_token: String,
     pub default_ttl: u32,
+    pub enable_acme_txt: bool,
     pub tsig_key_name: Name,
     pub tsig_secret: Vec<u8>,
     pub tsig_algorithm: TsigAlgorithm,
     pub log_level: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct RawConfig {
     listen_udp: String,
     listen_tcp: String,
@@ -32,6 +33,8 @@ struct RawConfig {
     cloudflare_zone_id: String,
     cloudflare_api_token: String,
     default_ttl: String,
+    #[serde(default)]
+    enable_acme_txt: bool,
     tsig_key_name: String,
     tsig_secret: String,
     tsig_algorithm: String,
@@ -41,7 +44,7 @@ struct RawConfig {
 impl AppConfig {
     pub fn from_env() -> Result<Self> {
         let raw: RawConfig = envy::from_env()
-            .map_err(|error| Error::Config(format!("missing or invalid environment: {error}")))?;
+            .map_err(|_| Error::Config("missing or invalid environment".to_string()))?;
 
         let listen_udp = parse_socket_addr("LISTEN_UDP", &raw.listen_udp)?;
         let listen_tcp = parse_socket_addr("LISTEN_TCP", &raw.listen_tcp)?;
@@ -77,6 +80,8 @@ impl AppConfig {
             ));
         }
 
+        validate_acme_ttl(raw.enable_acme_txt, default_ttl)?;
+
         let tsig_key_name = parse_name("TSIG_KEY_NAME", &raw.tsig_key_name)?;
         let tsig_secret = STANDARD.decode(raw.tsig_secret.trim()).map_err(|error| {
             Error::Config(format!("TSIG_SECRET must be base64 encoded: {error}"))
@@ -101,6 +106,7 @@ impl AppConfig {
             cloudflare_zone_id: raw.cloudflare_zone_id,
             cloudflare_api_token: raw.cloudflare_api_token,
             default_ttl,
+            enable_acme_txt: raw.enable_acme_txt,
             tsig_key_name,
             tsig_secret,
             tsig_algorithm,
@@ -130,5 +136,52 @@ fn parse_tsig_algorithm(value: &str) -> Result<TsigAlgorithm> {
         other => Err(Error::Config(format!(
             "TSIG_ALGORITHM must be hmac-sha256, hmac-sha384, or hmac-sha512; got {other}"
         ))),
+    }
+}
+
+fn validate_acme_ttl(enabled: bool, ttl: u32) -> Result<()> {
+    if enabled && ttl != 1 && !(60..=86_400).contains(&ttl) {
+        return Err(Error::Config(
+            "DEFAULT_TTL must be 1 or 60 through 86400 when ENABLE_ACME_TXT is true".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn acme_is_opt_in() {
+        let mut raw = serde_json::json!({
+            "listen_udp": "127.0.0.1:0", "listen_tcp": "127.0.0.1:0",
+            "dns_zone": "example.com.", "allowed_record_suffix": "example.com.",
+            "cloudflare_zone_id": "test-zone", "cloudflare_api_token": "dummy-api-token",
+            "default_ttl": "300", "tsig_key_name": "test-key.",
+            "tsig_secret": "ZHVtbXk=", "tsig_algorithm": "hmac-sha256", "log_level": "info"
+        });
+        assert!(
+            !serde_json::from_value::<RawConfig>(raw.clone())
+                .unwrap()
+                .enable_acme_txt
+        );
+        raw["enable_acme_txt"] = serde_json::json!(true);
+        assert!(
+            serde_json::from_value::<RawConfig>(raw)
+                .unwrap()
+                .enable_acme_txt
+        );
+    }
+
+    #[test]
+    fn acme_ttl_uses_the_non_enterprise_range() {
+        for ttl in [1, 60, 300, 86_400] {
+            assert!(validate_acme_ttl(true, ttl).is_ok());
+        }
+        for ttl in [0, 2, 30, 59, 86_401, u32::MAX] {
+            assert!(validate_acme_ttl(true, ttl).is_err());
+        }
+        assert!(validate_acme_ttl(false, 30).is_ok());
     }
 }

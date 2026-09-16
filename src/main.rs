@@ -50,3 +50,6 @@ fn init_tracing(log_level: &str) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod test_support;
