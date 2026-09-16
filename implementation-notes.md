@@ -53,7 +53,7 @@ Local Rust checks and container builds succeeded as recorded below.
 
 The remaining work sequence is:
 
-1. Correct the proxy code in a different PR.
+1. Start the proxy implementation from its specification in a new thread.
 2. Select the dev target and test domain.
 3. Deploy the PR image to dev and record behavior checks.
 4. Do the staging trial with the corrected proxy.
@@ -61,13 +61,11 @@ The remaining work sequence is:
 
 ## External work
 
-The current [proxy updater](https://github.com/acme-proxy/acme-proxy/blob/main/src/signer/relay/dns01.rs)
-uses `delete_rrset`, a ten-second timeout, and no response TSIG verification.
-Its UDP socket does not check the sender address.
-The [certificate flow](https://github.com/acme-proxy/acme-proxy/blob/main/src/signer/relay/flow.rs)
-starts validation immediately after the update.
-These findings are from source inspection on 2026-09-16. No proxy integration test
-ran. Proxy changes belong in a different PR.
+The detailed requirements moved to the
+[proxy specification](https://github.com/hugojosefson/acme-proxy/blob/docs/cloudflare-rfc2136-plan/needed-features.md)
+in the sibling repository `../acme-proxy`.
+The proxy work will start in a new thread. This session changes proxy documentation
+only. It does not change proxy code, tests, dependencies, or deployment configuration.
 
 A staging trial needs a public domain controlled by the operator, runtime
 Cloudflare credentials, a TSIG key, and a deployment target. We did not identify the target or domain. The trial must check public DNS, certificate issuance, cleanup,

@@ -2,7 +2,7 @@
 
 Current decisions, test results, and remaining work are in
 [the work record](implementation-notes.md). The source review below describes
-the original revision.
+the initial revision.
 
 ## Purpose and status
 
@@ -173,47 +173,14 @@ disk.
 
 ## 5. Integration work in the ACME proxy
 
-The intended public integration is
-[acme-proxy/acme-proxy](https://github.com/acme-proxy/acme-proxy). Source
-reviewed:
-[f005ffa](https://github.com/acme-proxy/acme-proxy/commit/f005ffa4a32b1868976d9c48b504f7b00e8786ec).
-These findings apply to that project. Do not add undocumented workarounds to the
-bridge for them.
+The proxy code requirements moved to the
+[proxy specification](https://github.com/hugojosefson/acme-proxy/blob/docs/cloudflare-rfc2136-plan/needed-features.md).
+The sibling repository `../acme-proxy` contains that document on
+`docs/cloudflare-rfc2136-plan`.
 
-### Cleanup must send the exact value
-
-The proxy's
-[RFC 2136 updater](https://github.com/acme-proxy/acme-proxy/blob/f005ffa4a32b1868976d9c48b504f7b00e8786ec/src/signer/relay/dns01.rs)
-uses `append` for additions, but `delete_txt` calls
-`update_message::delete_rrset`. The cleanup call removes the full record set
-rather than the supplied value.
-
-Change the proxy to send class NONE cleanup with the specified TXT RDATA. Use
-`update_message::delete_by_rdata` with a TXT `RecordSet`. Check the actual wire
-encoding in a test. A stub test of the `DnsUpdater` trait is not sufficient. The
-bridge cannot reconstruct the missing value from an empty class ANY request.
-This upstream change is necessary for concurrent challenges at one name.
-
-### Public DNS propagation before CA validation
-
-The proxy's
-[DNS-01 flow](https://github.com/acme-proxy/acme-proxy/blob/f005ffa4a32b1868976d9c48b504f7b00e8786ec/src/signer/relay/flow.rs)
-publishes the record and then triggers CA validation without an explicit DNS
-propagation wait in that path. Add or check bounded polling of public TXT
-answers before CA validation starts. Keep this wait in the issuer. The bridge
-must report API update success without waiting for public propagation.
-
-The updater has a ten-second exchange timeout. The bridge permits fifteen
-seconds for each API request. Align the timeout budgets and test slow API
-responses. One logical update can use multiple API calls.
-
-### Response authentication needs a check
-
-The reviewed updater checks the response ID and response code but does not
-validate the response TSIG in its `send` function. Its UDP path also receives
-without checking the sender address. Record response authentication and peer
-validation as upstream work. Signed bridge responses alone do not give
-verification at the sender.
+The bridge must keep its value-specific cleanup policy. Proxy compatibility and
+certificate issuance depend on integration evidence from the proxy work.
+No proxy implementation is part of this bridge change.
 
 ## 6. Test plan and acceptance criteria
 
