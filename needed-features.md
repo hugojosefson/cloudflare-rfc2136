@@ -1,5 +1,9 @@
 # ACME DNS-01 support for the Cloudflare RFC 2136 bridge
 
+Current decisions, test results, and remaining work are in
+[the work record](implementation-notes.md). The source review below describes
+the original revision.
+
 ## Purpose and status
 
 This proposal adds ACME DNS-01 challenge updates to the bridge. Cloudflare
