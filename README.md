@@ -1,7 +1,7 @@
 # Cloudflare DDNS RFC2136 Bridge
 
-This Rust service accepts authenticated RFC2136 updates and sends permitted DNS changes to the Cloudflare API.
-It accepts A and AAAA records by default. `ENABLE_ACME_TXT=true` also permits ACME TXT operations.
+This project is a stateless Rust service that accepts RFC2136 Dynamic DNS Update messages and applies permitted A and AAAA changes to the Cloudflare DNS API.
+Set `ENABLE_ACME_TXT=true` to also accept ACME TXT updates.
 
 Architecture:
 
@@ -14,9 +14,7 @@ DHCP server or RFC2136 DDNS client
 
 The service has no domain, zone, suffix, credential, or Cloudflare setting compiled into the binary. Runtime configuration comes only from environment variables.
 
-## Supported DNS behavior
-
-These rules apply:
+## Supported DNS Behavior
 
 - UDP and TCP DNS listeners.
 - RFC2136 UPDATE messages only.
@@ -24,13 +22,13 @@ These rules apply:
 - TSIG failures return REFUSED.
 - Only the configured DNS zone is accepted.
 - Only records below `ALLOWED_RECORD_SUFFIX` are accepted.
-- The bridge rejects zone apex records, wildcard names, and names outside the zone.
-- A and AAAA records cannot have an underscore at the start of the first label.
-- TXT operations are disabled by default. The ACME policy below controls TXT permissions.
-- The bridge rejects all other record types.
+- Zone apex, wildcard names, and out-of-zone names are refused.
+- First-label underscore names are refused except for permitted ACME TXT records.
+- A and AAAA are accepted by default. Set `ENABLE_ACME_TXT=true` for ACME TXT updates.
+- SOA, NS, MX, SRV, CNAME, PTR, and every other type are refused.
 - RFC2136 prerequisite sections are refused because the bridge is stateless.
 
-## Environment variables
+## Environment Variables
 
 | Name | Required | Example | Notes |
 | --- | --- | --- | --- |
@@ -40,8 +38,8 @@ These rules apply:
 | `ALLOWED_RECORD_SUFFIX` | yes | `example.internal.` | Accepted owner-name suffix. |
 | `CLOUDFLARE_ZONE_ID` | yes | `replace-me` | Cloudflare zone id. |
 | `CLOUDFLARE_API_TOKEN` | yes | `replace-me` | Cloudflare API token. Never logged. |
-| `DEFAULT_TTL` | yes | `300` | Cloudflare TTL. With ACME enabled: `1` for automatic TTL, or 60 through 86400 seconds. |
-| `ENABLE_ACME_TXT` | no | `false` | ACME TXT operations are available only with `true`. |
+| `DEFAULT_TTL` | yes | `300` | TTL used for Cloudflare records. With ACME enabled: `1` or 60 through 86400 seconds. |
+| `ENABLE_ACME_TXT` | no | `false` | Set to `true` for ACME TXT updates. |
 | `TSIG_KEY_NAME` | yes | `ddns-key.` | TSIG key name. |
 | `TSIG_SECRET` | yes | `base64-encoded-secret` | Base64 TSIG shared secret. Never logged. |
 | `TSIG_ALGORITHM` | yes | `hmac-sha256` | `hmac-sha256`, `hmac-sha384`, or `hmac-sha512`. |
@@ -113,14 +111,26 @@ Hickory message-builder tests check value-specific cleanup in DNS packets.
 These tests do not prove compatibility with a deployed proxy or public DNS.
 A [Let's Encrypt staging trial](https://letsencrypt.org/docs/staging-environment/) must check issuance, propagation, cleanup, and retries before production use.
 
-## Runtime credentials
+## TSIG Key Generation
 
-Supply `CLOUDFLARE_API_TOKEN` and `TSIG_SECRET` through runtime environment variables from your secret-management system.
-The TSIG secret must use standard Base64. Configure the same key name, algorithm, and secret in the issuer.
-Do not put credentials in command arguments or environment files on disk.
-The service does not use external commands for TSIG verification.
+Generate a shared secret:
 
-## Cloudflare API token
+```sh
+openssl rand -base64 32
+```
+
+Use that value as `TSIG_SECRET`. A BIND/nsupdate-style key file would look like this:
+
+```conf
+key "ddns-key." {
+    algorithm hmac-sha256;
+    secret "base64-encoded-secret";
+};
+```
+
+The service itself never shells out for TSIG validation.
+
+## Cloudflare API Token
 
 Create a Cloudflare API token scoped to the target zone with:
 
@@ -147,11 +157,10 @@ docker run --rm \
   -e DNS_ZONE=example.internal. \
   -e ALLOWED_RECORD_SUFFIX=example.internal. \
   -e CLOUDFLARE_ZONE_ID=replace-me \
-  -e CLOUDFLARE_API_TOKEN \
+  -e CLOUDFLARE_API_TOKEN=replace-me \
   -e DEFAULT_TTL=300 \
-  -e ENABLE_ACME_TXT=false \
   -e TSIG_KEY_NAME=ddns-key. \
-  -e TSIG_SECRET \
+  -e TSIG_SECRET=base64-encoded-secret \
   -e TSIG_ALGORITHM=hmac-sha256 \
   -e LOG_LEVEL=info \
   cloudflare-ddns-rfc2136:local
@@ -161,11 +170,11 @@ For container port 53 with a non-root runtime user, grant `NET_BIND_SERVICE` or 
 
 ## Kubernetes
 
-Supply credentials through your deployment secret-management system. The repository Secret is an example.
-Apply the configuration after you supply runtime credentials:
+Review the example Secret first, then apply:
 
 ```sh
 kubectl apply -f k8s/configmap.yaml
+kubectl apply -f k8s/secret.yaml
 kubectl apply -f k8s/deployment.yaml
 kubectl apply -f k8s/service.yaml
 ```
@@ -188,5 +197,4 @@ set service dhcp-server dynamic-dns-update forward-domain example.internal. dns-
 set service dhcp-server shared-network-name LAN dynamic-dns-update qualifying-suffix example.internal.
 ```
 
-DDNS accepts A and AAAA forward records. ACME TXT operations use the opt-in policy above.
-The bridge rejects reverse domains and PTR records.
+This bridge accepts A and AAAA forward records, plus ACME TXT records when enabled. Reverse domains and PTR records are refused by design.
