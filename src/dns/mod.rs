@@ -52,8 +52,10 @@ pub async fn run(config: AppConfig, cloudflare: CloudflareClient) -> Result<()> 
     let config = Arc::new(config);
     let cloudflare = Arc::new(cloudflare);
 
-    let udp_task = tokio::spawn(serve_udp(config.clone(), cloudflare.clone()));
-    let tcp_task = tokio::spawn(serve_tcp(config.clone(), cloudflare.clone()));
+    let udp = UdpSocket::bind(config.listen_udp).await?;
+    let tcp = TcpListener::bind(config.listen_tcp).await?;
+    let udp_task = tokio::spawn(serve_udp(udp, config.clone(), cloudflare.clone()));
+    let tcp_task = tokio::spawn(serve_tcp(tcp, config.clone(), cloudflare.clone()));
 
     tokio::select! {
         result = udp_task => result??,
@@ -67,8 +69,12 @@ pub async fn run(config: AppConfig, cloudflare: CloudflareClient) -> Result<()> 
     Ok(())
 }
 
-async fn serve_udp(config: Arc<AppConfig>, cloudflare: Arc<CloudflareClient>) -> Result<()> {
-    let socket = Arc::new(UdpSocket::bind(config.listen_udp).await?);
+async fn serve_udp(
+    socket: UdpSocket,
+    config: Arc<AppConfig>,
+    cloudflare: Arc<CloudflareClient>,
+) -> Result<()> {
+    let socket = Arc::new(socket);
     info!(addr = %config.listen_udp, "udp listener ready");
 
     loop {
@@ -89,8 +95,11 @@ async fn serve_udp(config: Arc<AppConfig>, cloudflare: Arc<CloudflareClient>) ->
     }
 }
 
-async fn serve_tcp(config: Arc<AppConfig>, cloudflare: Arc<CloudflareClient>) -> Result<()> {
-    let listener = TcpListener::bind(config.listen_tcp).await?;
+async fn serve_tcp(
+    listener: TcpListener,
+    config: Arc<AppConfig>,
+    cloudflare: Arc<CloudflareClient>,
+) -> Result<()> {
     info!(addr = %config.listen_tcp, "tcp listener ready");
 
     loop {
@@ -170,25 +179,7 @@ async fn handle_wire(
 
     for change in changes {
         debug!(?change, "applying dns change");
-        let result = match change {
-            rfc2136::DnsChange::Upsert {
-                name,
-                kind,
-                contents,
-            } => {
-                cloudflare
-                    .upsert_rrset(&name, kind, &contents, config.default_ttl)
-                    .await
-            }
-            rfc2136::DnsChange::DeleteRrset { name, kind } => {
-                cloudflare.delete_rrset(&name, kind).await
-            }
-            rfc2136::DnsChange::DeleteRecord {
-                name,
-                kind,
-                content,
-            } => cloudflare.delete_record(&name, kind, &content).await,
-        };
+        let result = apply_change(change, &config, &cloudflare).await;
 
         if let Err(error) = result {
             error!(%error, "cloudflare api request failed");
@@ -199,6 +190,32 @@ async fn handle_wire(
 
     let response = build_response(&request, ResponseCode::NoError);
     encode_response(response, Some(&verified_tsig), &config, raw)
+}
+
+async fn apply_change(
+    change: rfc2136::DnsChange,
+    config: &AppConfig,
+    cloudflare: &CloudflareClient,
+) -> std::result::Result<(), crate::cloudflare::CloudflareError> {
+    match change {
+        rfc2136::DnsChange::Upsert {
+            name,
+            kind,
+            contents,
+        } => {
+            cloudflare
+                .upsert_rrset(&name, kind, &contents, config.default_ttl)
+                .await
+        }
+        rfc2136::DnsChange::DeleteRrset { name, kind } => {
+            cloudflare.delete_rrset(&name, kind).await
+        }
+        rfc2136::DnsChange::DeleteRecord {
+            name,
+            kind,
+            content,
+        } => cloudflare.delete_record(&name, kind, &content).await,
+    }
 }
 
 fn build_response(request: &Message, response_code: ResponseCode) -> Message {

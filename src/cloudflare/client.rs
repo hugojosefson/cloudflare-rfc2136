@@ -13,6 +13,7 @@ const BASE_URL: &str = "https://api.cloudflare.com/client/v4";
 #[derive(Clone)]
 pub struct CloudflareClient {
     http: Client,
+    base_url: String,
     zone_id: String,
     api_token: String,
 }
@@ -49,8 +50,22 @@ pub enum CloudflareError {
 
 impl CloudflareClient {
     pub fn new(zone_id: String, api_token: String) -> Result<Self, CloudflareError> {
+        Self::with_endpoint(
+            zone_id,
+            api_token,
+            BASE_URL.to_string(),
+            Duration::from_secs(15),
+        )
+    }
+
+    pub(crate) fn with_endpoint(
+        zone_id: String,
+        api_token: String,
+        base_url: String,
+        timeout: Duration,
+    ) -> Result<Self, CloudflareError> {
         let http = Client::builder()
-            .timeout(Duration::from_secs(15))
+            .timeout(timeout)
             .user_agent(concat!(
                 "cloudflare-ddns-rfc2136/",
                 env!("CARGO_PKG_VERSION")
@@ -60,6 +75,7 @@ impl CloudflareClient {
 
         Ok(Self {
             http,
+            base_url,
             zone_id,
             api_token,
         })
@@ -248,7 +264,7 @@ impl CloudflareClient {
     }
 
     fn records_url(&self) -> String {
-        format!("{BASE_URL}/zones/{}/dns_records", self.zone_id)
+        format!("{}/zones/{}/dns_records", self.base_url, self.zone_id)
     }
 }
 
