@@ -178,3 +178,36 @@ This instruction replaces the parent instruction to push to `origin`.
 The parent instruction requires `bd` for issue tracking and synchronization.
 The `bd` command is not available. I cannot do those steps.
 This document records the remaining work.
+
+## BIND client checks
+
+The previous protocol tests use Hickory to make requests and check responses.
+The new [BIND test](src/dns/nsupdate_tests.rs) checks the bridge with `nsupdate`.
+It uses dummy credentials, local UDP and TCP sockets, and the mock Cloudflare API.
+BIND `nsupdate` version `9.20.24-1ubuntu0.3-Ubuntu` succeeded with UDP and TCP.
+
+The test checks these operations:
+
+- Add two values at the same name.
+- Add the same value again without a duplicate record.
+- Remove one value and keep the other value.
+- Do cleanup again when the value is missing.
+- Refuse removal of the full TXT record set.
+
+The test requires BIND `nsupdate`. The default test command ignores this test.
+The explicit command succeeded:
+
+```sh
+cargo test --workspace --locked bind_nsupdate -- --ignored
+```
+
+This test does not prove compatibility with the proxy, public DNS, or a certificate authority.
+The user did not select a dev target or test domain.
+Live deployment and issuance checks stay pending.
+The PR has no comments or reviews. The latest checked
+[upstream CI run](https://github.com/47star/cloudflare-rfc2136/actions/runs/35110167520)
+reports `action_required` for commit `6f8f609`.
+
+After the test addition, formatting, Clippy, the locked build, and all 28 default tests succeeded.
+The BIND test also succeeded with the explicit command above.
+AMD64 and ARM64 container builds succeeded without image publication.
